@@ -91,47 +91,33 @@ module GCalendar
     #  c) data exists in both.  timestamps don't match. -> update older object
     #  d) data exists in both, timestamps match -> do nothing (unless force update flag?)
     #
-    def sync_calendars
-      xml = get_user_calendar_xml
-      self.body = xml.to_s
+    def sync_calendars(opts={})
+      #opts[:force] = true # ignore updated timestamps and update from google unconditionally
+      #opts[:range] = Range(Date-start .. Date-end)
+      
+      # why does the primary calendar feed change every time?
+      feed_xml = get_user_calendar_xml
+      xml_ts = Time.zone.parse(feed_xml.xpath('/ns:feed/ns:updated', 'ns'=>'http://www.w3.org/2005/Atom').text)
+      self.body = feed_xml.to_s if xml_ts != synced_at
 
-      # find each entry and display title and links
-      xml.css('entry').each { |entry|
-        #TODO move this code down into calendar itself.
+      feed_xml.css('entry').each { |entry|
         existing_cal = calendars.find :first, :conditions=>{ :uid=>entry.css('id').text}
         if existing_cal
-          # found existing calendar, check to see if it needs updating
-          entry_updated = Time.parse(entry.css('updated').text)
-          changed = existing_cal.updated != entry_updated
-          if changed
-            puts "changed calendar #{existing_cal.title} ar obj = #{existing_cal.updated}  xml = #{entry_updated}"
-            if existing_cal.updated > entry_updated
-              # local cached is newer than google version
-              existing_cal  #.push
-              # push it up to google
-            else
-              # google version is newer than local cached version
-              existing_cal.body = entry.to_s  # or existing_cal.pull
-              existing_cal.save!
-            end
-          else
-            puts "existing calendar #{existing_cal.title} unchanged"
-          end
-
+          # if force existing_cal.events.destroy_all
+          existing_cal.sync_with_xml(entry) # , range - allows calendar to only sync specified range
         else
           cal = Calendar.new(:init=>entry)
-          puts "not found.  creating new calendar object for #{cal.title}"
+          puts "XXX not found.  creating new calendar object for #{cal.title}"
           calendars << cal
+          cal.sync_events
         end
       }
-      # find any local calendars that are new and push them up to google
-      touch :synced_at
 
-      calendars.each { |cal|
-        event_xml = get_events_xml(cal.url)
-        cal.sync_events(event_xml) # PENDING - different sync types.
-        # when getting events xml, do we get all or ask for a range?
-      }
+      # find any local calendars that are new and push them up to google
+      calendars.find(:all, :conditions=>{:synced_at=>nil}).each do |entry|
+      end
+      self.synced_at = xml_ts
+      save
     end
 
     # return a Nokogiri xml object of this feed.  For docs on functions to view and
@@ -139,6 +125,9 @@ module GCalendar
     # Atom xml feed, see the google calendar api docs.
     def xml
       Nokogiri::XML(body)
+    end
+    def etag
+      xml.xpath('/ns:feed', 'ns'=>'http://www.w3.org/2005/Atom').attribute('etag').text
     end
   end
 

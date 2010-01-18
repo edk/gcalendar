@@ -91,7 +91,7 @@ module GCalendar
     # updated is the last updated time as determined by the xml data (ie google)
     def updated
       time = xml.xpath('//updated').text
-      Time.parse(time)
+      Time.zone.parse(time)
     end
     def xml
       Nokogiri::XML(body)
