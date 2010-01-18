@@ -10,6 +10,11 @@ begin
     gem.email = "eddyhkim@gmail.com"
     gem.homepage = "http://github.com/edk/gcalendar"
     gem.authors = ["Eddy Kim"]
+    gem.requirements << "gdata, a library to access the Google Data API"
+    gem.requirements << "ri_cal, a library to read and manipulate RFC2445 entitites"
+    gem.add_dependency 'gdata', '>= 1.1.1'
+    gem.add_dependency 'ri_cal'
+    
     # gem is a Gem::Specification... see http://www.rubygems.org/read/chapter/20 for additional settings
   end
   Jeweler::GemcutterTasks.new

@@ -142,20 +142,25 @@ module GCalendar
 
       # find each entry and display title and links
       xml.css('entry').each { |entry|
-        rv = calendars.find :first, :conditions=>{ :uid=>entry.css('id').text}
-        if rv
+        #TODO move this code down into calendar itself.
+        existing_cal = calendars.find :first, :conditions=>{ :uid=>entry.css('id').text}
+        if existing_cal
           # found existing calendar, check to see if it needs updating
           entry_updated = Time.parse(entry.css('updated').text)
-          changed = rv.updated != entry_updated
+          changed = existing_cal.updated != entry_updated
           if changed
-            puts "changed calendar #{rv.title} ar obj = #{rv.updated}  xml = #{entry_updated}"
-            if rv.updated > entry_updated
+            puts "changed calendar #{existing_cal.title} ar obj = #{existing_cal.updated}  xml = #{entry_updated}"
+            if existing_cal.updated > entry_updated
               # local cached is newer than google version
+              existing_cal  #.push
+              # push it up to google
             else
               # google version is newer than local cached version
+              existing_cal.body = entry.to_s  # or existing_cal.pull
+              existing_cal.save!
             end
           else
-            puts "existing calendar #{rv.title} unchanged"
+            puts "existing calendar #{existing_cal.title} unchanged"
           end
 
         else
@@ -282,7 +287,6 @@ module GCalendar
           changed = e.updated != existing_event.updated
           if changed
             puts "e!=existing_event:  #{e.updated} != #{existing_event.updated}"
-            debugger
           end
           puts "existing event #{existing_event.title}.  need to see if changes need to be propogated"
         else
@@ -375,7 +379,6 @@ module GCalendar
         #*singleevents=true: recurring events are represented in the same format as single events, with a single entry element per occurrence of the event. Each entry includes a single gd:when element, but does not include the gd:recurrence syntax. It does, however, include a gd:originalEvent element.
 
         e.body = ent.to_s
-        #debugger
         rv << e
       end
       rv
