@@ -77,7 +77,9 @@ module GCalendar
       Nokogiri::XML(response.body)
     end
 
-    # logic for syncing the feed with all calendars and associated events of said calendars.
+    # As stated, the goal of this library is to manipulate the google calendar, using
+    # ActiveRecord as a cache.  This means that synchronization needs to follow
+    # these rules:
     #
     #  a) data exists in gcal and not in local -> create local objects
     #     - note that deletion of a local event must either immediately delete the google
@@ -91,10 +93,9 @@ module GCalendar
     #  c) data exists in both.  timestamps don't match. -> update older object
     #  d) data exists in both, timestamps match -> do nothing (unless force update flag?)
     #
+    # opts[:force] = true # ignore updated timestamps and update from google unconditionally
+    # opts[:range] = Range(Date-start .. Date-end)
     def sync_calendars(opts={})
-      #opts[:force] = true # ignore updated timestamps and update from google unconditionally
-      #opts[:range] = Range(Date-start .. Date-end)
-      
       # why does the primary calendar feed change every time?
       feed_xml = get_user_calendar_xml
       xml_ts = Time.zone.parse(feed_xml.xpath('/ns:feed/ns:updated', 'ns'=>'http://www.w3.org/2005/Atom').text)
@@ -103,8 +104,8 @@ module GCalendar
       feed_xml.css('entry').each { |entry|
         existing_cal = calendars.find :first, :conditions=>{ :uid=>entry.css('id').text}
         if existing_cal
-          # if force existing_cal.events.destroy_all
-          existing_cal.sync_with_xml(entry) # , range - allows calendar to only sync specified range
+          existing_cal.events.destroy_all if opts[:force] == true
+          existing_cal.sync_with_xml(entry, opts) # , range - allows calendar to only sync specified range
         else
           cal = Calendar.new(:init=>entry)
           puts "XXX not found.  creating new calendar object for #{cal.title}"

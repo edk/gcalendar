@@ -4,6 +4,8 @@ module GCalendar
     set_table_name "gcal_events"
     belongs_to :calendar, :class_name=>'GCalendar::Calendar', :foreign_key=>'gcal_cal_id'
 
+    # used when dealing with multiple events as part of a recurrence.
+    # See #occurances for how this gets generated
     attr_accessor :original_ruby_obj
 
     before_save :normalize_blank_to_nil
@@ -24,10 +26,9 @@ module GCalendar
       resp.body
     end
     def self.delit
-
     end
 
-    def self.build_from_xml(event_entries)
+    def self.events_from_xml(feed, event_entries)
       rv = []
       event_entries.xpath('//defns:entry', 'defns'=>'http://www.w3.org/2005/Atom').each do |ent|
         e = Event.new
@@ -51,16 +52,29 @@ module GCalendar
             e.all_day = true
           end
           # alarm info is in here too.  Do we care?
-          #whentag.xpath('gd:reminder')
+          # whentag.xpath('gd:reminder')
         end
-        e.original_event = ent.xpath('gd:originalEvent').to_s # means this is an instance of recurring event
-        e.original_event = ent.css('originalEvent').to_s
-        # @id - event id of original event
-        # @href - event feed for original event
 
         e.recurring = ent.xpath('gd:recurrence').try(:text)
         #ent.xpath('gd:recurrenceException')
         #ent.path('gd:eventStatus').first.attributes  - confirmed, cancelled or tentative
+
+        e.original_event = ent.xpath('gd:originalEvent')
+        if e.original_event && e.original_event.size>0
+          orig_event = feed.session.get(e.original_event.first.attributes['href'].to_s)
+          orig_xml = Nokogiri::XML(orig_event.body)
+          e.recurring = orig_xml.xpath('//gd:recurrence').try :text
+
+          e.original_event = e.original_event.first.to_s  # assume only one original event, unless told otherwise
+
+          # we have a recurrence.  get the original event? copy the recurrence into this
+          # object?  make sure to handle recurrence exceptions.
+
+          #orig_id    = e.original_event.attributes['id']
+          #orig_href = e.original_event.attributes['href']
+        end
+        # @id - event id of original event
+        # @href - event feed for original event
 
         #*No query parameters: a recurring event is returned as a single entry element, with a gd:recurrence child element. No gd:when elements are returned for the recurring event.
         #*start-min and/or start-max specified: a recurring event is represented as a single entry element, with multiple gd:when elements for each occurrence in the range specified. The gd:recurrence element is also included in the entry.
@@ -72,9 +86,26 @@ module GCalendar
       rv
     end
 
-    def category
-      calendar.try :title
+    def update_if_needed(e)
+      # check to see if we need to update up or down
+      changed = e.updated != updated
+      if changed
+        if etag != e.etag && (updated > e.updated)
+          # local is newer than google version of event
+          puts "local version is newer.  updating google version"
+        else
+          # google version is newer than local cached version
+          puts "google version is newer.  updating local event #{e.title}"
+          update_from(e)
+        end
+      end
     end
+
+    def category
+      @category ||= calendar.title.gsub(/( |\t)/,'').downcase || ""
+      @category
+    end
+
     def short_time_range
       start_time = self.start.strftime("%H:%M")
       end_time = self.end.strftime("%H:%M")
@@ -83,12 +114,20 @@ module GCalendar
     def day_span
       # figure out if we need to display for more than one day. minimum is 1 day
     end
+
     def original_event_id
       Nokogiri::XML(original_event).root['id']
     end
-    # This is different from _updated_at_ the magic AR column which is the last
+    def original_event_obj
+      debugger
+      if original_event
+        return calendar.events.find_by_uid original_event_id
+      end
+    end
+    # This is different from _updated_at_, the magic AR column which is the last
     # time the AR object was written to.
-    # updated is the last updated time as determined by the xml data (ie google)
+    # updated is the last updated time as determined by the xml data (ie google).
+    # We use this to determine if the AR object is stale.
     def updated
       time = xml.xpath('//updated').text
       Time.zone.parse(time)
@@ -101,19 +140,37 @@ module GCalendar
     #      # sync needs to update the server
     #    end
 
-    def rical
-      if !recurring.blank?
-        r = RiCal::parse_string("BEGIN:VEVENT\n"+recurring+"END:VEVENT").first
-      end
-      r
+    # returns true or false based on if this event is a single event or a recurring event
+    def single_event?
+      return true if recurring.blank? and original_event.nil?
+      false
     end
+
+    def rical
+      return nil if recurring.blank?
+      RiCal::parse_string("BEGIN:VEVENT\n"+recurring+"END:VEVENT").first
+    end
+
+    # returns nil if this is a single occurrence event
+    # recurrences can be specified in two ways by the gapi.
+    # 1. empty start/end times and no recurring tag
+    # 2. start/end time set and a link to originalEvent
     def occurrences(range)
-      # rical occurrences
-      # r.occurrences(options)
-      # options= {:starting, :before, :count, :overlapping}
-      # r.zulu_occurrence_range  # gives first and last in range of occurrences
+      return nil if single_event?
+
+      # if original_event then get the id and search for it and use its recurrence data
+      if original_event
+        #recurr_obj = original_event_obj.try :rical
+        #debugger
+        #puts
+        debugger
+        recurr_obj = rical
+      else
+        recurr_obj = rical
+      end
+      debugger if recurr_obj.nil?
       rv = []
-      rical.occurrences(:overlapping=>[range.first, range.last]).each { |rical_event|
+      recurr_obj.occurrences(:overlapping=>[range.first, range.last]).each { |rical_event|
         # clone this obj, and set the date
         rv << self.clone
         rv.last.start = rical_event.dtstart
@@ -130,7 +187,19 @@ module GCalendar
         end
       end
     end
+    private
+    
+    def update_from(other)
+      ["etag", "created_at", "title", "body", "author",
+        "updated_at", "synced_at",
+        "gcal_cal_id", "uid",
+        "end", "start", "desc", "where", "recurring", "all_day"].each do |attr|
+        write_attribute(attr, other.read_attribute(attr) )
+      end
+    end
+
 
   end
+
 end
 

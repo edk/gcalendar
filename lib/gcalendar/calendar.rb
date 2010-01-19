@@ -31,18 +31,18 @@ module GCalendar
           # local cached is newer than google version
           #.push
           # push it up to google
+          puts "this should not happen here"
+          #debugger
+          puts "this should not happen here"
         else
           # google version is newer than local cached version
-          init = xml_entry
+          self.init = xml_entry
           save!
         end
+        sync_events(nil, opts)
       else
         puts "XXX existing calendar #{title} unchanged"
       end
-      sync_events(nil, opts)  # run this unconditionally, assuming that changes to events
-      # don't change the calendar object.
-      #          event_xml = get_events_xml(existing_cal.url)
-      #          existing_cal.sync_events(event_xml)
     end
 
     # xml_entry - Nokogiri object of the calendar entry
@@ -54,20 +54,18 @@ module GCalendar
         event_xml = feed.get_events_xml(url)
       end
       # TODO add to build_From_xml  a way to specify a date range
-      new_events = Event.build_from_xml(event_xml)
+      new_events = Event.events_from_xml(feed, event_xml)
+      remaining_event_ids = event_ids
 
+      # TODO what about deletions on the google side.  how to detect?
       new_events.each do |e|
         # see if the event is in the calendar association already.
         existing_event = events.find_by_uid e.uid
+
         if existing_event
-          # check to see if we need to update up or down
-          changed = e.updated != existing_event.updated
-          if changed
-            puts "e!=existing_event:  #{e.updated} != #{existing_event.updated}"
-          end
-          puts "existing event #{existing_event.title}.  need to see if changes need to be propogated"
+          existing_event.update_if_needed(e)
         else
-          puts "adding new event #{e.title}"
+          puts "+++ adding new event #{e.title}"
           events << e
         end
       end
