@@ -4,6 +4,14 @@ module GCalendar
     set_table_name "gcal_events"
     belongs_to :calendar, :class_name=>'GCalendar::Calendar', :foreign_key=>'gcal_cal_id'
 
+    named_scope :active, :conditions=>['status=? or status=?','event.confirmed', 'event.tentative']
+    named_scope :single_event, :conditions=>['recurring is null and original_event is null']
+    named_scope :multiple_event, :conditions=>['recurring is not null or original_event is not null']
+    named_scope :date_range, lambda { |range|
+      {:conditions=>['start between ? and ?', range.first, range.last]}
+    } # only works for single_event
+
+
     # used when dealing with multiple events as part of a recurrence.
     # See #occurances for how this gets generated
     attr_accessor :original_ruby_obj
@@ -29,35 +37,49 @@ module GCalendar
     end
 
     def self.events_from_xml(feed, event_entries)
+      # implementation note:
+      # Some of the atom entries are links to other xml objects.  we try to simplify
+      # things by following links where necessary, and "flattening" the data by pulling
+      # in the referenced data into the current object to avoid having to follow links to
+      # multiple objects later.
+      #
       rv = []
       event_entries.xpath('//defns:entry', 'defns'=>'http://www.w3.org/2005/Atom').each do |ent|
         e = Event.new
         e.etag = ent['etag']
 
-        #e.title = ent.xpath('defns:title', 'defns'=>'http://www.w3.org/2005/Atom').text
-        e.title = ent.css('title').text  # css ignores namespacing
+        e.title = ent.xpath('defns:title', 'defns'=>'http://www.w3.org/2005/Atom').text
         e.desc = ent.xpath('defns:content', 'defns'=>'http://www.w3.org/2005/Atom').text
         author = ent.xpath('defns:author', 'defns'=>'http://www.w3.org/2005/Atom')
         e.author = "<#{author.css('name').text}> #{author.css('email').text}" if author
         e.uid = ent.xpath('gCal:uid').first['value'].gsub(/@google.com$/,'')
         e.where = ent.xpath('gd:where').text
+        event_status = ent.xpath('gd:eventStatus')
+        if event_status.size > 0
 
+          e.status = event_status.first.attribute('value').to_s.split('#').last  # confirmed, cancelled or tentative from google
+          # can also use it as a deleted flag if we want to delete locally and remove from api when doing a sync
+        end
+
+        puts "number of gd:when is more than one.  #{ent.xpath('gd:when').to_s}" if ent.xpath('gd:when').size > 1
         if ent.xpath('gd:when').first
           whentag = ent.xpath('gd:when').first
+          puts "parsing event whentag = #{whentag.to_s}"
           e.start, e.end = whentag['startTime'],  whentag['endTime']
 
-          if whentag['startTime'].match(/:/) and whentag['endTime'].match(/:/)
-            e.all_day = false
-          else
-            e.all_day = true
-          end
-          # alarm info is in here too.  Do we care?
-          # whentag.xpath('gd:reminder')
+          # assume that if the datetime string does not have a : character, we only have the date, no time
+          # ie. all day event.  all day events can also be specified by the time range 00:00:00 -> 24:00:00 ?
+          e.all_day = !(whentag['startTime'].match(/:/) and whentag['endTime'].match(/:/))
+          # alarm info is in here too.  Do we care?  whentag.xpath('gd:reminder')
         end
 
         e.recurring = ent.xpath('gd:recurrence').try(:text)
-        #ent.xpath('gd:recurrenceException')
-        #ent.path('gd:eventStatus').first.attributes  - confirmed, cancelled or tentative
+        puts "recurrence exception!!!! handle it (#{ent.xpath('gd:recurrenceException').to_s})" if ent.xpath('gd:recurrenceException').to_s.size>0
+        #ent.path('gd:eventStatus').first.attributes  -
+        if false #recurrenceException
+          # get the href, create a new nokogiri xml obj
+          # use that new one to populate this object.
+        end
 
         e.original_event = ent.xpath('gd:originalEvent')
         if e.original_event && e.original_event.size>0
@@ -69,12 +91,7 @@ module GCalendar
 
           # we have a recurrence.  get the original event? copy the recurrence into this
           # object?  make sure to handle recurrence exceptions.
-
-          #orig_id    = e.original_event.attributes['id']
-          #orig_href = e.original_event.attributes['href']
         end
-        # @id - event id of original event
-        # @href - event feed for original event
 
         #*No query parameters: a recurring event is returned as a single entry element, with a gd:recurrence child element. No gd:when elements are returned for the recurring event.
         #*start-min and/or start-max specified: a recurring event is represented as a single entry element, with multiple gd:when elements for each occurrence in the range specified. The gd:recurrence element is also included in the entry.
@@ -92,7 +109,21 @@ module GCalendar
       if changed
         if etag != e.etag && (updated > e.updated)
           # local is newer than google version of event
-          puts "local version is newer.  updating google version"
+          puts "----------local version is newer.  updating google version"
+          puts "L: #{xml.xpath('//title').to_s} \n"+
+            "R:  #{e.xml.xpath('//title').to_s} \n"+
+            "L: #{xml.xpath('//originalEvent').to_s} \n" +
+            "R: #{e.xml.xpath('//originalEvent').to_s} \n" +
+            "L: #{xml.xpath('//updated').to_s} \n" +
+            "R: #{e.xml.xpath('//updated').to_s} \n" +
+            "L: #{xml.xpath('//edited').to_s} \n" +
+            "R: #{e.xml.xpath('//edited').to_s} \n" +
+            "L: #{xml.xpath('/entry/when').to_s}\n" +
+            "R: #{e.xml.xpath('/entry/when').to_s}\n"+
+            "L: #{xml.xpath('/entry/eventStatus').to_s}\n" +
+            "R: #{e.xml.xpath('/entry/eventStatus').to_s}\n"#+
+          #            "R: #{xml.to_s}\n\n" +
+          #            "R: #{e.xml.to_s}\n\n"
         else
           # google version is newer than local cached version
           puts "google version is newer.  updating local event #{e.title}"
@@ -109,7 +140,7 @@ module GCalendar
     def short_time_range
       start_time = self.start.strftime("%H:%M")
       end_time = self.end.strftime("%H:%M")
-      "#{start_time} #{end_time}"
+      "#{self.start.strftime('%F')} #{start_time} #{end_time}"
     end
     def day_span
       # figure out if we need to display for more than one day. minimum is 1 day
@@ -119,7 +150,6 @@ module GCalendar
       Nokogiri::XML(original_event).root['id']
     end
     def original_event_obj
-      debugger
       if original_event
         return calendar.events.find_by_uid original_event_id
       end
@@ -161,14 +191,11 @@ module GCalendar
       # if original_event then get the id and search for it and use its recurrence data
       if original_event
         #recurr_obj = original_event_obj.try :rical
-        #debugger
-        #puts
-        debugger
         recurr_obj = rical
       else
         recurr_obj = rical
       end
-      debugger if recurr_obj.nil?
+
       rv = []
       recurr_obj.occurrences(:overlapping=>[range.first, range.last]).each { |rical_event|
         # clone this obj, and set the date

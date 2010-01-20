@@ -12,6 +12,15 @@ module GCalendar
     ALL_OWNS_FEED = "http://www.google.com/calendar/feeds/default/owncalendars/full"
 
     #before_destroy :destroy_gcal  # this can fail if the calendar is the primary calendar
+    # either figure out how to determine if it's the primary or catch the error
+
+    # return an array of events both single and recurring within the date range
+    def events_in_range(range, opts={})
+      single = events.active.single_event.date_range(range)
+      multiples = events.active.multiple_event.collect {|i| i.occurrences(range)}.flatten
+
+      single+ multiples
+    end
 
     # given an xml object of a calendar (parsed from the google calendars feed)
     # check to see if the local cached object needs updating, or if the google copy
@@ -32,8 +41,6 @@ module GCalendar
           #.push
           # push it up to google
           puts "this should not happen here"
-          #debugger
-          puts "this should not happen here"
         else
           # google version is newer than local cached version
           self.init = xml_entry
@@ -51,7 +58,10 @@ module GCalendar
     #                       set of events in the calendar.
     def sync_events(event_xml = nil, opts={})
       if event_xml.nil?
-        event_xml = feed.get_events_xml(url)
+        event_url = self.url #+ "?recurrence-expansion-start=2005-08-01T00:00:00-08:00&recurrence-expansion-end=2010-08-01T00:00:00-08:00"
+        event_url = event_url.gsub(/private\/full/, 'private/composite')
+        puts "in sync_events event_url = #{event_url}"
+        event_xml = feed.get_events_xml event_url
       end
       # TODO add to build_From_xml  a way to specify a date range
       new_events = Event.events_from_xml(feed, event_xml)
