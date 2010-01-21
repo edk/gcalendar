@@ -11,6 +11,19 @@ module GCalendar
 
     USER_FEED = "http://www.google.com/calendar/feeds/default/owncalendars/full" # :nodoc:
 
+    # Google Calendar does not have a category concept.  Instead a feed
+    # consists of multiple calendars.  We've chosen to map the category into
+    # the calendar concept.
+    #
+    # This function, category, returns an array of calendar objects which match the
+    # requested category(ies).
+    #
+    # categories can be a single string/symbol or an array of strings/symbols.
+    def category categories
+      categories = categories.to_a if !categories.is_a? Array
+      categories.collect { |i| calendars.find_by_title i.to_s }.compact
+    end
+
     # Sessions are opened to the google api using a google username and password.
     # This implemented so that only one session is used per feed.  You probably
     # won't need to use this, but if you do, you can access the session for a feed
