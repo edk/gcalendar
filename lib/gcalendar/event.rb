@@ -137,10 +137,16 @@ module GCalendar
       @category
     end
 
-    def short_time_range
-      start_time = self.start.strftime("%H:%M")
+    def short_time_range(opts={})
+      return "" if all_day
+      # TODO remove this, and set this in an appropriate global location
+      Time.zone = 'Pacific Time (US & Canada)'
+      start_time = (self.start.in_time_zone.strftime("%M")=='00') ?
+        self.start.in_time_zone.strftime('%l') : self.start.in_time_zone.strftime('%l:%M')
+      start_time += "p" if self.start.in_time_zone.strftime('%H').to_i > 12
       end_time = self.end.strftime("%H:%M")
-      "#{self.start.strftime('%F')} #{start_time} #{end_time}"
+      return "#{start_time} #{end_time}" if opts[:debug]
+      "#{start_time}"
     end
     def day_span
       # figure out if we need to display for more than one day. minimum is 1 day
