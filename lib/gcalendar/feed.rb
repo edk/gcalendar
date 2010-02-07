@@ -64,9 +64,8 @@ module GCalendar
 
       cal = GCalendar::Calendar.new(:opts=>opts)
 
-      if cal.sync
-        calendars << cal
-      end
+      calendars << cal
+      cal.sync
       save
     end
 

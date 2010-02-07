@@ -143,20 +143,19 @@ module GCalendar
       doc.first['href']
     end
 
-    #    def sync
-    #      action = :create if synced_at.nil?
-    #
-    #      case action
-    #      when :create
-    #        response = feed.session.post(GCalendar::Calendar::ALL_OWNS_FEED, body.to_s)
-    #        resp = Nokogiri::XML(response.body)
-    #        self.body= resp.to_s
-    #        init=resp if response.status_code == 201
-    #        touch :synced_at
-    #      end
-    #
-    #      true
-    #    end
+    def sync
+      action = :create if synced_at.nil?
+    
+      case action
+      when :create
+        response = feed.session.post(GCalendar::Calendar::ALL_OWNS_FEED, body.to_s)
+        resp = Nokogiri::XML(response.body)
+        self.body= resp.to_s
+        init=resp if response.status_code == 201
+        touch :synced_at
+      end
+      true
+    end
 
     def xml
       Nokogiri::XML(body)
